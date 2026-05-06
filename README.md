@@ -14,7 +14,7 @@
 ## 빌드 (Android Studio)
 
 1. **Android Studio** 설치 (최소 Hedgehog 2023.1+, 권장 Iguana 이상)
-2. `File → Open` 으로 `screen-draw-android` 폴더 열기
+2. `File → Open` 으로 이 레포의 루트 폴더 열기
 3. 처음 열면 Gradle Sync 자동 실행 → wrapper / SDK 자동 다운로드
 4. `Run → Run 'app'` 또는 상단 ▶︎ 버튼 → 연결된 태블릿에 바로 설치
 
@@ -52,9 +52,9 @@ Android SDK 환경변수(`ANDROID_HOME`)가 설정되어 있다면:
 
 ## GitHub Actions로 자동 빌드 (PC에 SDK 설치 없이 APK 받기)
 
-`.github/workflows/build-screen-draw-apk.yml` 가 같이 들어있습니다.
+`.github/workflows/build-apk.yml` 가 같이 들어있습니다.
 
-- `screen-draw-android/` 안의 파일을 수정해 push → 자동으로 클라우드에서 APK 빌드
+- main에 push → 자동으로 클라우드에서 APK 빌드
 - Actions 탭에서 `screen-draw-debug-apk` artifact 다운로드 → 태블릿에 설치
 - `git tag v1.0 && git push --tags` 로 태그 푸시 시 → APK가 자동으로 **Release**에 첨부됨
 
@@ -63,20 +63,22 @@ Android SDK 환경변수(`ANDROID_HOME`)가 설정되어 있다면:
 ## 프로젝트 구조
 
 ```
-screen-draw-android/
+screen-draw/
 ├── build.gradle.kts          # 프로젝트 레벨
 ├── settings.gradle.kts
 ├── gradle.properties
+├── .github/workflows/build-apk.yml
 └── app/
     ├── build.gradle.kts      # 모듈 레벨 (SDK 26~34, Kotlin 1.9)
     └── src/main/
         ├── AndroidManifest.xml
         ├── kotlin/com/jun/screendraw/
         │   ├── MainActivity.kt        # 권한 요청 + 서비스 시작/종료
-        │   ├── OverlayService.kt      # 포어그라운드 서비스, 버블↔캔버스 토글
+        │   ├── OverlayService.kt      # 포어그라운드 서비스, 버블↔캔버스 토글, 상태 영구 저장
         │   ├── FloatingBubble.kt      # 드래그 가능한 작은 펜 버튼
-        │   ├── DrawingOverlay.kt      # 풀스크린 캔버스 + 툴바
-        │   └── DrawingCanvasView.kt   # Path 기반 필기 (지우개 = PorterDuff.CLEAR)
+        │   ├── DrawingOverlay.kt      # 풀스크린 캔버스 + 툴바 (SeekBar)
+        │   ├── DrawingCanvasView.kt   # Path 기반 필기 + 영역/획 지우개
+        │   └── DrawState.kt           # 도구 상태 데이터 클래스
         └── res/...
 ```
 
