@@ -25,16 +25,13 @@ class OverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        startForeground(NOTIF_ID, buildNotification())
-        showBubble()
-    }
-
-    private fun startForeground(id: Int, notification: Notification) {
+        val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
-            super.startForeground(id, notification)
+            startForeground(NOTIF_ID, notification)
         }
+        showBubble()
     }
 
     private fun showBubble() {
