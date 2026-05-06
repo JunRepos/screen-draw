@@ -11,6 +11,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 
 class DrawingOverlay(
     private val context: Context,
@@ -22,6 +23,7 @@ class DrawingOverlay(
     private val colorButtons = mutableListOf<View>()
     private val widthButtons = mutableListOf<TextView>()
     private val toolButtons = mutableListOf<TextView>() // 펜·형광펜·지우개 토글
+    private var eraserButton: TextView? = null
     private var ignoreFingerButton: TextView? = null
 
     private val container: FrameLayout = FrameLayout(context).apply {
@@ -66,6 +68,7 @@ class DrawingOverlay(
         selectColor(0)
         selectWidth(1)
         selectTool(0) // 펜
+        updateEraserLabel()
     }
 
     fun detach(wm: WindowManager) {
@@ -115,7 +118,30 @@ class DrawingOverlay(
         // 도구 (펜·형광펜·지우개)
         toolButtons.add(textBtn("펜") { canvasView.tool = Tool.PEN; selectTool(0) })
         toolButtons.add(textBtn("형광펜") { canvasView.tool = Tool.HIGHLIGHTER; selectTool(1) })
-        toolButtons.add(textBtn("지우개") { canvasView.tool = Tool.ERASER; selectTool(2) })
+
+        // 지우개 — 짧게 탭: 지우개 모드 진입. 길게 누름: 영역↔획 토글.
+        val eraser = textBtn("지우개") {
+            canvasView.tool = Tool.ERASER
+            selectTool(2)
+        }
+        eraser.setOnLongClickListener {
+            canvasView.eraserMode = if (canvasView.eraserMode == EraserMode.PIXEL) {
+                EraserMode.STROKE
+            } else {
+                EraserMode.PIXEL
+            }
+            canvasView.tool = Tool.ERASER
+            selectTool(2)
+            updateEraserLabel()
+            Toast.makeText(
+                context,
+                if (canvasView.eraserMode == EraserMode.STROKE) "획 지우개" else "영역 지우개",
+                Toast.LENGTH_SHORT
+            ).show()
+            true
+        }
+        eraserButton = eraser
+        toolButtons.add(eraser)
         toolButtons.forEach { bar.addView(it) }
         bar.addView(divider())
 
@@ -218,6 +244,10 @@ class DrawingOverlay(
                 cornerRadius = dp(8).toFloat()
             }
         }
+    }
+
+    private fun updateEraserLabel() {
+        eraserButton?.text = if (canvasView.eraserMode == EraserMode.STROKE) "획지우개" else "지우개"
     }
 
     private fun updateIgnoreFinger() {
