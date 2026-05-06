@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Color
 import android.os.Build
 import android.os.IBinder
 import android.view.WindowManager
@@ -21,6 +22,10 @@ class OverlayService : Service() {
 
     private var bubbleX = 50
     private var bubbleY = 300
+
+    private val prefs by lazy {
+        getSharedPreferences("screen_draw", Context.MODE_PRIVATE)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -53,14 +58,46 @@ class OverlayService : Service() {
     private fun enterDrawingMode() {
         if (drawingOverlay != null) return
         hideBubble()
-        drawingOverlay = DrawingOverlay(this) { exitDrawingMode() }
-            .also { it.attachTo(windowManager) }
+        val state = loadState()
+        drawingOverlay = DrawingOverlay(this, state) { finalState ->
+            saveState(finalState)
+            exitDrawingMode()
+        }.also { it.attachTo(windowManager) }
     }
 
     private fun exitDrawingMode() {
         drawingOverlay?.detach(windowManager)
         drawingOverlay = null
         showBubble()
+    }
+
+    private fun loadState(): DrawState {
+        val density = resources.displayMetrics.density
+        val defaultPenWidthPx = 4f * density
+        val defaultHlWidthPx = 20f * density
+        return DrawState(
+            tool = runCatching {
+                Tool.valueOf(prefs.getString(KEY_TOOL, null) ?: Tool.PEN.name)
+            }.getOrDefault(Tool.PEN),
+            color = prefs.getInt(KEY_COLOR, Color.BLACK),
+            penWidthPx = prefs.getFloat(KEY_PEN_WIDTH, defaultPenWidthPx),
+            highlighterWidthPx = prefs.getFloat(KEY_HL_WIDTH, defaultHlWidthPx),
+            eraserMode = runCatching {
+                EraserMode.valueOf(prefs.getString(KEY_ERASER_MODE, null) ?: EraserMode.PIXEL.name)
+            }.getOrDefault(EraserMode.PIXEL),
+            ignoreFinger = prefs.getBoolean(KEY_IGNORE_FINGER, false)
+        )
+    }
+
+    private fun saveState(state: DrawState) {
+        prefs.edit()
+            .putString(KEY_TOOL, state.tool.name)
+            .putInt(KEY_COLOR, state.color)
+            .putFloat(KEY_PEN_WIDTH, state.penWidthPx)
+            .putFloat(KEY_HL_WIDTH, state.highlighterWidthPx)
+            .putString(KEY_ERASER_MODE, state.eraserMode.name)
+            .putBoolean(KEY_IGNORE_FINGER, state.ignoreFinger)
+            .apply()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -104,5 +141,11 @@ class OverlayService : Service() {
 
     companion object {
         private const val NOTIF_ID = 1001
+        private const val KEY_TOOL = "tool"
+        private const val KEY_COLOR = "color"
+        private const val KEY_PEN_WIDTH = "penWidth"
+        private const val KEY_HL_WIDTH = "hlWidth"
+        private const val KEY_ERASER_MODE = "eraserMode"
+        private const val KEY_IGNORE_FINGER = "ignoreFinger"
     }
 }

@@ -34,20 +34,20 @@ class DrawingCanvasView(context: Context) : View(context) {
     private var lastY = 0f
 
     var color: Int = Color.BLACK
-    var strokeWidth: Float = 8f
     var tool: Tool = Tool.PEN
     var eraserMode: EraserMode = EraserMode.PIXEL
-
-    /** true 일 때 손가락 입력은 무시 (펜으로만 필기). 밑 앱 조작은 여전히 안 됨. */
     var ignoreFinger: Boolean = false
 
-    /** 획 지우개 hit-test 반경 — 펜 좌표와의 거리 임계값 */
+    /** 펜 모드의 stroke 굵기 (px). 지우개의 굵기는 이 값 × 4. */
+    var penWidth: Float = 0f
+    /** 형광펜 모드의 stroke 굵기 (px). */
+    var highlighterWidth: Float = 0f
+
     private val strokeEraseRadiusPx: Float by lazy {
         18f * resources.displayMetrics.density
     }
 
     init {
-        // 영역 지우개(CLEAR xfermode)가 자체 레이어에 작동하도록
         setLayerType(LAYER_TYPE_SOFTWARE, null)
     }
 
@@ -57,18 +57,18 @@ class DrawingCanvasView(context: Context) : View(context) {
         when (effectiveTool) {
             Tool.PEN -> {
                 strokeCap = Paint.Cap.ROUND
-                this.strokeWidth = this@DrawingCanvasView.strokeWidth
+                this.strokeWidth = penWidth
                 this.color = this@DrawingCanvasView.color
             }
             Tool.HIGHLIGHTER -> {
                 strokeCap = Paint.Cap.SQUARE
-                this.strokeWidth = this@DrawingCanvasView.strokeWidth * 3.5f
+                this.strokeWidth = highlighterWidth
                 this.color = this@DrawingCanvasView.color
                 this.alpha = (255 * 0.35f).toInt()
             }
             Tool.ERASER -> {
                 strokeCap = Paint.Cap.ROUND
-                this.strokeWidth = this@DrawingCanvasView.strokeWidth * 4f
+                this.strokeWidth = penWidth * 4f
                 xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
             }
         }

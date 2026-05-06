@@ -10,21 +10,38 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 
 class DrawingOverlay(
     private val context: Context,
-    private val onClose: () -> Unit
+    private val initialState: DrawState,
+    private val onClose: (DrawState) -> Unit
 ) {
 
-    private val canvasView = DrawingCanvasView(context)
+    private val canvasView = DrawingCanvasView(context).apply {
+        color = initialState.color
+        penWidth = initialState.penWidthPx
+        highlighterWidth = initialState.highlighterWidthPx
+        tool = initialState.tool
+        eraserMode = initialState.eraserMode
+        ignoreFinger = initialState.ignoreFinger
+    }
+
+    private val palette = listOf(
+        Color.BLACK,
+        0xFFE53935.toInt(),
+        0xFF1E88E5.toInt(),
+        0xFFFDD835.toInt(),
+        0xFF43A047.toInt()
+    )
 
     private val colorButtons = mutableListOf<View>()
-    private val widthButtons = mutableListOf<TextView>()
-    private val toolButtons = mutableListOf<TextView>() // 펜·형광펜·지우개 토글
+    private val toolButtons = mutableListOf<TextView>()
     private var eraserButton: TextView? = null
     private var ignoreFingerButton: TextView? = null
+    private lateinit var widthSeekBar: SeekBar
 
     private val container: FrameLayout = FrameLayout(context).apply {
         setBackgroundColor(0x33000000)
@@ -64,11 +81,7 @@ class DrawingOverlay(
         if (attached) return
         wm.addView(container, params)
         attached = true
-        // 초기 상태
-        selectColor(0)
-        selectWidth(1)
-        selectTool(0) // 펜
-        updateEraserLabel()
+        applyInitialUiState()
     }
 
     fun detach(wm: WindowManager) {
@@ -76,6 +89,20 @@ class DrawingOverlay(
             wm.removeView(container)
             attached = false
         }
+    }
+
+    private fun applyInitialUiState() {
+        val colorIdx = palette.indexOf(initialState.color).let { if (it < 0) 0 else it }
+        selectColor(colorIdx)
+        val toolIdx = when (initialState.tool) {
+            Tool.PEN -> 0
+            Tool.HIGHLIGHTER -> 1
+            Tool.ERASER -> 2
+        }
+        selectTool(toolIdx)
+        updateEraserLabel()
+        updateIgnoreFinger()
+        syncWidthSeekBar()
     }
 
     private fun buildToolbar(): View {
@@ -89,24 +116,17 @@ class DrawingOverlay(
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        bar.addView(textBtn("닫기", color = 0xFFFF8A80.toInt()) { onClose() })
+        bar.addView(textBtn("닫기", color = 0xFFFF8A80.toInt()) { closeAndReportState() })
         bar.addView(divider())
 
         // 색상 팔레트
-        val palette = listOf(
-            Color.BLACK,
-            0xFFE53935.toInt(),
-            0xFF1E88E5.toInt(),
-            0xFFFDD835.toInt(),
-            0xFF43A047.toInt() // 초록 추가 — 형광펜용으로 자주 씀
-        )
         palette.forEachIndexed { i, c ->
             val swatch = colorSwatch(c) {
                 canvasView.color = c
-                // 색을 누르면 지우개에서 빠져나오고 직전 도구(펜/형광펜)로
                 if (canvasView.tool == Tool.ERASER) {
                     canvasView.tool = Tool.PEN
                     selectTool(0)
+                    syncWidthSeekBar()
                 }
                 selectColor(i)
             }
@@ -116,13 +136,22 @@ class DrawingOverlay(
         bar.addView(divider())
 
         // 도구 (펜·형광펜·지우개)
-        toolButtons.add(textBtn("펜") { canvasView.tool = Tool.PEN; selectTool(0) })
-        toolButtons.add(textBtn("형광펜") { canvasView.tool = Tool.HIGHLIGHTER; selectTool(1) })
+        toolButtons.add(textBtn("펜") {
+            canvasView.tool = Tool.PEN
+            selectTool(0)
+            syncWidthSeekBar()
+        })
+        toolButtons.add(textBtn("형광펜") {
+            canvasView.tool = Tool.HIGHLIGHTER
+            selectTool(1)
+            syncWidthSeekBar()
+        })
 
-        // 지우개 — 짧게 탭: 지우개 모드 진입. 길게 누름: 영역↔획 토글.
+        // 지우개 — 짧게: 진입 / 길게: 영역↔획 토글
         val eraser = textBtn("지우개") {
             canvasView.tool = Tool.ERASER
             selectTool(2)
+            syncWidthSeekBar()
         }
         eraser.setOnLongClickListener {
             canvasView.eraserMode = if (canvasView.eraserMode == EraserMode.PIXEL) {
@@ -132,6 +161,7 @@ class DrawingOverlay(
             }
             canvasView.tool = Tool.ERASER
             selectTool(2)
+            syncWidthSeekBar()
             updateEraserLabel()
             Toast.makeText(
                 context,
@@ -145,11 +175,31 @@ class DrawingOverlay(
         toolButtons.forEach { bar.addView(it) }
         bar.addView(divider())
 
-        // 굵기
-        widthButtons.add(textBtn("얇게") { canvasView.strokeWidth = dp(2).toFloat(); selectWidth(0) })
-        widthButtons.add(textBtn("중간") { canvasView.strokeWidth = dp(4).toFloat(); selectWidth(1) })
-        widthButtons.add(textBtn("굵게") { canvasView.strokeWidth = dp(8).toFloat(); selectWidth(2) })
-        widthButtons.forEach { bar.addView(it) }
+        // 굵기 슬라이드바 (펜·형광펜 각각 독립 굵기)
+        widthSeekBar = SeekBar(context).apply {
+            max = 100
+            layoutParams = LinearLayout.LayoutParams(
+                dp(140), LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginEnd = dp(8)
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    val (loDp, hiDp) = currentDpRange()
+                    val targetDp = loDp + (hiDp - loDp) * (progress / 100f)
+                    val px = targetDp * context.resources.displayMetrics.density
+                    when (canvasView.tool) {
+                        Tool.HIGHLIGHTER -> canvasView.highlighterWidth = px
+                        else -> canvasView.penWidth = px // PEN, ERASER
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        }
+        bar.addView(widthSeekBar)
         bar.addView(divider())
 
         // 손가락 무시 토글
@@ -158,7 +208,6 @@ class DrawingOverlay(
             updateIgnoreFinger()
         }
         ignoreFingerButton?.apply {
-            // 두 줄 표시 — 라인 높이 조정
             setLineSpacing(0f, 0.9f)
             textSize = 11f
         }
@@ -172,6 +221,36 @@ class DrawingOverlay(
         })
 
         return bar
+    }
+
+    private fun currentDpRange(): Pair<Float, Float> = when (canvasView.tool) {
+        Tool.HIGHLIGHTER -> 8f to 40f
+        else -> 1f to 16f // PEN, ERASER 모두 펜 굵기 매핑
+    }
+
+    private fun syncWidthSeekBar() {
+        if (!::widthSeekBar.isInitialized) return
+        val (loDp, hiDp) = currentDpRange()
+        val curPx = when (canvasView.tool) {
+            Tool.HIGHLIGHTER -> canvasView.highlighterWidth
+            else -> canvasView.penWidth
+        }
+        val curDp = curPx / context.resources.displayMetrics.density
+        val progress = ((curDp - loDp) / (hiDp - loDp) * 100f).toInt().coerceIn(0, 100)
+        widthSeekBar.progress = progress
+    }
+
+    private fun closeAndReportState() {
+        onClose(
+            DrawState(
+                tool = canvasView.tool,
+                color = canvasView.color,
+                penWidthPx = canvasView.penWidth,
+                highlighterWidthPx = canvasView.highlighterWidth,
+                eraserMode = canvasView.eraserMode,
+                ignoreFinger = canvasView.ignoreFinger
+            )
+        )
     }
 
     private fun textBtn(
@@ -220,15 +299,6 @@ class DrawingOverlay(
 
     private fun selectColor(index: Int) {
         colorButtons.forEachIndexed { i, v -> v.alpha = if (i == index) 1.0f else 0.4f }
-    }
-
-    private fun selectWidth(index: Int) {
-        widthButtons.forEachIndexed { i, v ->
-            v.background = GradientDrawable().apply {
-                setColor(if (i == index) 0x33FFFFFF else 0x00000000)
-                cornerRadius = dp(8).toFloat()
-            }
-        }
     }
 
     private fun selectTool(index: Int) {
