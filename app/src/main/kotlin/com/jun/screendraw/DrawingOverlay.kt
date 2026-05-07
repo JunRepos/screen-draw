@@ -14,8 +14,17 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 
+/**
+ * 필기 오버레이는 두 개의 분리된 윈도우로 구성:
+ *   1. 캔버스 윈도우 — 풀스크린, 모드에 따라 FLAG_NOT_TOUCHABLE 동적 토글
+ *   2. 툴바 윈도우 — 작은 영역, 항상 터치 활성
+ *
+ * "조작" 모드 진입 시 캔버스 윈도우에 NOT_TOUCHABLE을 켜서 터치가 밑 앱으로 통과되고,
+ * 툴바는 그대로 떠있어서 다시 "필기"로 전환 가능.
+ */
 class DrawingOverlay(
     private val context: Context,
+    private val windowManager: WindowManager,
     private val initialState: DrawState,
     private val onClose: (DrawState) -> Unit
 ) {
@@ -41,10 +50,14 @@ class DrawingOverlay(
     private val toolButtons = mutableListOf<TextView>()
     private var eraserButton: TextView? = null
     private var ignoreFingerButton: TextView? = null
+    private var passthroughButton: TextView? = null
     private lateinit var widthSeekBar: SeekBar
 
-    private val container: FrameLayout = FrameLayout(context).apply {
-        setBackgroundColor(0x33000000)
+    /** true 일 때 캔버스 윈도우는 NOT_TOUCHABLE — 터치가 밑 앱으로 통과됨. */
+    private var passthrough: Boolean = false
+
+    private val canvasContainer: FrameLayout = FrameLayout(context).apply {
+        setBackgroundColor(CANVAS_TINT)
         addView(
             canvasView,
             FrameLayout.LayoutParams(
@@ -52,19 +65,11 @@ class DrawingOverlay(
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
-        addView(
-            buildToolbar(),
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                topMargin = dp(24)
-            }
-        )
     }
 
-    private val params = WindowManager.LayoutParams(
+    private val toolbarView: View = buildToolbar()
+
+    private val canvasParams = WindowManager.LayoutParams(
         WindowManager.LayoutParams.MATCH_PARENT,
         WindowManager.LayoutParams.MATCH_PARENT,
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -75,18 +80,33 @@ class DrawingOverlay(
         gravity = Gravity.TOP or Gravity.START
     }
 
+    private val toolbarParams = WindowManager.LayoutParams(
+        WindowManager.LayoutParams.WRAP_CONTENT,
+        WindowManager.LayoutParams.WRAP_CONTENT,
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+        PixelFormat.TRANSLUCENT
+    ).apply {
+        gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        y = dp(24)
+    }
+
     private var attached = false
 
-    fun attachTo(wm: WindowManager) {
+    fun attachTo() {
         if (attached) return
-        wm.addView(container, params)
+        // 캔버스 먼저(아래), 툴바 다음(위)
+        windowManager.addView(canvasContainer, canvasParams)
+        windowManager.addView(toolbarView, toolbarParams)
         attached = true
         applyInitialUiState()
     }
 
-    fun detach(wm: WindowManager) {
+    fun detach() {
         if (attached) {
-            wm.removeView(container)
+            windowManager.removeView(toolbarView)
+            windowManager.removeView(canvasContainer)
             attached = false
         }
     }
@@ -102,7 +122,25 @@ class DrawingOverlay(
         selectTool(toolIdx)
         updateEraserLabel()
         updateIgnoreFinger()
+        updatePassthroughButton()
         syncWidthSeekBar()
+    }
+
+    private fun togglePassthrough() {
+        passthrough = !passthrough
+        // 모드 전환 시 필기 내용은 사라짐
+        canvasView.clearAll()
+        // 캔버스 윈도우의 터치 받기 토글
+        canvasParams.flags = if (passthrough) {
+            canvasParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        } else {
+            canvasParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        }
+        canvasContainer.setBackgroundColor(if (passthrough) 0x00000000 else CANVAS_TINT)
+        if (attached) {
+            windowManager.updateViewLayout(canvasContainer, canvasParams)
+        }
+        updatePassthroughButton()
     }
 
     private fun buildToolbar(): View {
@@ -117,6 +155,10 @@ class DrawingOverlay(
         }
 
         bar.addView(textBtn("닫기", color = 0xFFFF8A80.toInt()) { closeAndReportState() })
+
+        // 전환(필기 ↔ 조작) 버튼 — 누르면 필기 내용 지워지고 캔버스 통과 모드로
+        passthroughButton = textBtn("조작") { togglePassthrough() }
+        bar.addView(passthroughButton)
         bar.addView(divider())
 
         // 색상 팔레트
@@ -147,7 +189,6 @@ class DrawingOverlay(
             syncWidthSeekBar()
         })
 
-        // 지우개 — 짧게: 진입 / 길게: 영역↔획 토글
         val eraser = textBtn("지우개") {
             canvasView.tool = Tool.ERASER
             selectTool(2)
@@ -175,7 +216,7 @@ class DrawingOverlay(
         toolButtons.forEach { bar.addView(it) }
         bar.addView(divider())
 
-        // 굵기 슬라이드바 (펜·형광펜 각각 독립 굵기)
+        // 굵기 슬라이드바
         widthSeekBar = SeekBar(context).apply {
             max = 100
             layoutParams = LinearLayout.LayoutParams(
@@ -192,7 +233,7 @@ class DrawingOverlay(
                     val px = targetDp * context.resources.displayMetrics.density
                     when (canvasView.tool) {
                         Tool.HIGHLIGHTER -> canvasView.highlighterWidth = px
-                        else -> canvasView.penWidth = px // PEN, ERASER
+                        else -> canvasView.penWidth = px
                     }
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
@@ -225,7 +266,7 @@ class DrawingOverlay(
 
     private fun currentDpRange(): Pair<Float, Float> = when (canvasView.tool) {
         Tool.HIGHLIGHTER -> 8f to 40f
-        else -> 1f to 16f // PEN, ERASER 모두 펜 굵기 매핑
+        else -> 1f to 16f
     }
 
     private fun syncWidthSeekBar() {
@@ -307,7 +348,7 @@ class DrawingOverlay(
                 setColor(
                     when {
                         i != index -> 0x00000000
-                        index == 2 -> 0x55FF5252 // 지우개는 빨강 톤
+                        index == 2 -> 0x55FF5252
                         else -> 0x33FFFFFF
                     }
                 )
@@ -327,8 +368,21 @@ class DrawingOverlay(
         }
     }
 
+    private fun updatePassthroughButton() {
+        passthroughButton?.text = if (passthrough) "필기" else "조작"
+        passthroughButton?.background = GradientDrawable().apply {
+            // 조작 모드 활성 시 파란 톤 강조
+            setColor(if (passthrough) 0x5564B5F6 else 0x00000000)
+            cornerRadius = dp(8).toFloat()
+        }
+    }
+
     private fun dp(v: Int): Int = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(),
         context.resources.displayMetrics
     ).toInt()
+
+    companion object {
+        private const val CANVAS_TINT = 0x33000000
+    }
 }

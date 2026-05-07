@@ -59,14 +59,14 @@ class OverlayService : Service() {
         if (drawingOverlay != null) return
         hideBubble()
         val state = loadState()
-        drawingOverlay = DrawingOverlay(this, state) { finalState ->
+        drawingOverlay = DrawingOverlay(this, windowManager, state) { finalState ->
             saveState(finalState)
             exitDrawingMode()
-        }.also { it.attachTo(windowManager) }
+        }.also { it.attachTo() }
     }
 
     private fun exitDrawingMode() {
-        drawingOverlay?.detach(windowManager)
+        drawingOverlay?.detach()
         drawingOverlay = null
         showBubble()
     }
@@ -105,7 +105,7 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        drawingOverlay?.detach(windowManager)
+        drawingOverlay?.detach()
         drawingOverlay = null
         bubble?.detach(windowManager)
         bubble = null
