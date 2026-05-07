@@ -6,13 +6,13 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
-import android.widget.Toast
 
 /**
  * 필기 오버레이는 두 개의 분리된 윈도우로 구성:
@@ -52,6 +52,9 @@ class DrawingOverlay(
     private var ignoreFingerButton: TextView? = null
     private var passthroughButton: TextView? = null
     private lateinit var widthSeekBar: SeekBar
+
+    /** 지우개 모드 선택 드롭다운 — 별도 WindowManager 윈도우. */
+    private var eraserDropdown: View? = null
 
     /** true 일 때 캔버스 윈도우는 NOT_TOUCHABLE — 터치가 밑 앱으로 통과됨. */
     private var passthrough: Boolean = false
@@ -104,6 +107,7 @@ class DrawingOverlay(
     }
 
     fun detach() {
+        hideEraserDropdown()
         if (attached) {
             windowManager.removeView(toolbarView)
             windowManager.removeView(canvasContainer)
@@ -130,6 +134,7 @@ class DrawingOverlay(
         passthrough = !passthrough
         // 모드 전환 시 필기 내용은 사라짐
         canvasView.clearAll()
+        hideEraserDropdown()
         // 캔버스 윈도우의 터치 받기 토글
         canvasParams.flags = if (passthrough) {
             canvasParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -189,28 +194,9 @@ class DrawingOverlay(
             syncWidthSeekBar()
         })
 
-        val eraser = textBtn("지우개") {
-            canvasView.tool = Tool.ERASER
-            selectTool(2)
-            syncWidthSeekBar()
-        }
-        eraser.setOnLongClickListener {
-            canvasView.eraserMode = if (canvasView.eraserMode == EraserMode.PIXEL) {
-                EraserMode.STROKE
-            } else {
-                EraserMode.PIXEL
-            }
-            canvasView.tool = Tool.ERASER
-            selectTool(2)
-            syncWidthSeekBar()
-            updateEraserLabel()
-            Toast.makeText(
-                context,
-                if (canvasView.eraserMode == EraserMode.STROKE) "획 지우개" else "영역 지우개",
-                Toast.LENGTH_SHORT
-            ).show()
-            true
-        }
+        // ▾ 지우개 — 누르면 드롭다운(영역/획) 펼침. 메뉴에서 선택하면 그 모드로 진입.
+        val eraser = textBtn("▾ 지우개") { /* 아래에서 다시 설정 */ }
+        eraser.setOnClickListener { toggleEraserDropdown(eraser) }
         eraserButton = eraser
         toolButtons.add(eraser)
         toolButtons.forEach { bar.addView(it) }
@@ -358,8 +344,98 @@ class DrawingOverlay(
     }
 
     private fun updateEraserLabel() {
-        eraserButton?.text = if (canvasView.eraserMode == EraserMode.STROKE) "획지우개" else "지우개"
+        eraserButton?.text = if (canvasView.eraserMode == EraserMode.STROKE) "▾ 획지우개" else "▾ 지우개"
     }
+
+    private fun toggleEraserDropdown(anchor: View) {
+        if (eraserDropdown != null) {
+            hideEraserDropdown()
+        } else {
+            showEraserDropdown(anchor)
+        }
+    }
+
+    private fun showEraserDropdown(anchor: View) {
+        val loc = IntArray(2)
+        anchor.getLocationOnScreen(loc)
+
+        val menu = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(0xEE2A2A2A.toInt())
+                cornerRadius = dp(12).toFloat()
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+            elevation = dp(8).toFloat()
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+
+        menu.addView(makeMenuItem("영역 지우개", canvasView.eraserMode == EraserMode.PIXEL) {
+            applyEraser(EraserMode.PIXEL)
+            hideEraserDropdown()
+        })
+        menu.addView(makeMenuItem("획 지우개", canvasView.eraserMode == EraserMode.STROKE) {
+            applyEraser(EraserMode.STROKE)
+            hideEraserDropdown()
+        })
+
+        val params = WindowManager.LayoutParams(
+            dp(150),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = loc[0]
+            y = loc[1] + anchor.height + dp(4)
+        }
+
+        // 드롭다운 외부 터치 → 자동 닫기
+        menu.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_OUTSIDE) {
+                hideEraserDropdown()
+            }
+            false
+        }
+
+        windowManager.addView(menu, params)
+        eraserDropdown = menu
+    }
+
+    private fun hideEraserDropdown() {
+        eraserDropdown?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
+        eraserDropdown = null
+    }
+
+    private fun applyEraser(mode: EraserMode) {
+        canvasView.eraserMode = mode
+        canvasView.tool = Tool.ERASER
+        selectTool(2)
+        syncWidthSeekBar()
+        updateEraserLabel()
+    }
+
+    private fun makeMenuItem(label: String, checked: Boolean, onClick: () -> Unit): TextView =
+        TextView(context).apply {
+            text = if (checked) "✓  $label" else "      $label"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = GradientDrawable().apply {
+                setColor(0x00000000)
+                cornerRadius = dp(8).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener { onClick() }
+        }
 
     private fun updateIgnoreFinger() {
         ignoreFingerButton?.background = GradientDrawable().apply {
